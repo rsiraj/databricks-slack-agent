@@ -1,0 +1,1 @@
+<!-- Anthropic-specific prompt notes. Deliberately empty: utils/system_prompt.py drops comment-only lines and appends nothing, so the deployed Claude prompt (and its cache prefix) stays byte-identical to the pre-provider layout. Add real content here only after re-baselining the model_call measurements. -->

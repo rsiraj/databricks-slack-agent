@@ -1,0 +1,74 @@
+# Copy this file to terraform.tfvars and replace every REPLACE_ME value.
+# This file contains identifiers, not secret values. Do not put tokens here.
+
+aws_region  = "us-east-1"
+# aws_profile = "your-aws-sso-profile" # Local use only; omit in CI/Terraform Cloud.
+
+app_name = "databricks-slack-agent"
+
+bot_github_repository  = "your-github-username/databricks-slack-agent"
+data_github_repository = "your-github-username/your-databricks-repo"
+
+# Use the FULL secret ARN, including the 6-character suffix Secrets Manager
+# appends to every secret (the "-AbCdEf" part). Copy it from
+#   aws secretsmanager describe-secret --secret-id <name> --query ARN
+databricks_secret_arn   = "arn:aws:secretsmanager:us-east-1:123456789012:secret:databricks/token/REPLACE_ME-AbCdEf"
+databricks_warehouse_id = "REPLACE_ME"
+
+# Cost-allocation tags. Project is set automatically to app_name.
+partner = "REPLACE_ME"
+team    = "REPLACE_ME"
+
+# The GitHub Actions OIDC provider is account-wide. Leave false when it already
+# exists; set true only when IAM > Identity providers does not contain
+# token.actions.githubusercontent.com.
+create_github_oidc_provider = false
+
+# Optional deployment/runtime overrides:
+# github_deploy_branch  = "main"
+# github_environment    = "production"
+# github_default_ref    = "main"
+# is_production         = true
+# log_retention_days    = 365
+# api_access_logs_enabled = true
+# dynamodb_deletion_protection_enabled = true   # sessions + feedback tables (default true)
+#
+# If either credential secret uses a customer-managed KMS key, include its ARN:
+# app_credentials_kms_key_id = "arn:aws:kms:us-east-1:123456789012:key/REPLACE_ME"
+# kms_decrypt_key_arns = [
+#   "arn:aws:kms:us-east-1:123456789012:key/REPLACE_ME",
+# ]
+#
+# Lambda sizing and concurrency (null = unreserved, draws from the account pool):
+# receiver_memory_size                    = 1024
+# receiver_timeout_seconds                = 10
+# receiver_reserved_concurrent_executions = null
+# worker_memory_size                      = 2048
+# worker_timeout_seconds                  = 900
+# worker_reserved_concurrent_executions   = null
+#
+# API Gateway throttling on the Slack events route:
+# api_throttling_burst_limit = 50
+# api_throttling_rate_limit  = 25
+#
+# Agent / model knobs (exported to the worker as environment variables):
+# llm_provider                    = "anthropic"   # or "openai" (needs the openai package + openai_api_key in the app secret)
+# llm_model                       = ""            # provider-neutral override; empty = provider default
+# anthropic_model                 = "claude-sonnet-5"
+# anthropic_effort                = "high"
+# anthropic_max_tokens            = 24000
+# anthropic_timeout_seconds       = 180
+# agent_min_seconds_per_iteration = 90
+#
+# Additional supported settings:
+# databricks_row_limit       = 1000
+# ratelimit_user_per_hour    = 60
+# ratelimit_user_per_day     = 200
+# ratelimit_channel_per_hour = 200
+# ratelimit_sql_per_day      = 500
+# additional_tags = {
+#   Application = "Data Assistant"
+# }
+# worker_environment_variables = {
+#   SOME_OPTIONAL_SETTING = "value"
+# }

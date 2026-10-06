@@ -1,0 +1,45 @@
+version: 2
+updates:
+  # Python runtime + test dependencies. pyproject.toml declares the constraints and
+  # uv.lock is the single source of truth; Dependabot's uv ecosystem updates both in
+  # one PR, and the Dockerfile / workflows derive everything they install from
+  # uv.lock at build time (nothing else has to be regenerated).
+  #
+  # The `Conversation evaluations` job is skipped on Dependabot PRs (no repository
+  # secrets in Dependabot-triggered runs). A bump of `anthropic` or anything else that
+  # could change model behaviour must also be pushed by a maintainer (or run via
+  # `gh workflow run`) so the eval executes with the key; see evals/README.md.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions pinned by commit SHA in .github/workflows/*.yml.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Lambda base image pinned by digest in the Dockerfile. The Python minor (3.12) is
+  # pinned deliberately: pyproject.toml requires-python and uv.lock are resolved for
+  # it. Only digest refreshes of the 3.12 tag should arrive as PRs.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "public.ecr.aws/lambda/python"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"

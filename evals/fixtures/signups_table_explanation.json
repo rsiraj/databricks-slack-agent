@@ -1,0 +1,181 @@
+{
+  "id": "signups_table_explanation",
+  "notes": "Reproduces the planning mistakes seen in production for an end-to-end table explanation: guard rejections and tool errors, analytical SQL before exact metadata verification, SQL against the build-only internal_sum CTE field, and unsupported schedule/cadence or age-drift claims. Those are behavioral and stay hard. The two required_final_patterns (the _anonymousId grain and the browser/device identity model) are content coverage and stay at the default soft severity: an earlier CI run produced a complete, evidence-backed explanation that phrased the grain without the literal column name, and that is a coverage gap worth reporting in summary.md, not a behavioral regression worth blocking a merge over. The synthetic repository also lists a deliberately stale `Signups MA - Merge.sql` next to the current notebook; reading it answers with a wrong_github_source tool error, which is soft by default (a wasted read that succeeds in production; earlier comparison runs each did it once after reading the current file). Using it is what must fail: the last four forbidden_final_patterns catch an answer that presents the MA notebook as the table's current or build source (as the subject that builds/populates the table, as the object of 'built by' / 'current source', or as a 'Source:' / 'Build logic:' label) while deliberately not matching the correct phrasing that names it as a historical, unused or not-inspected Mobile App variant, or the correct explanation of the non-Mobile-App referral filter.",
+  "user_prompt": "Explain acme_prod.reporting.signups end to end, including its grain, upstream sources, joins, filters, deduplication, important columns, common pitfalls, lineage, and validation SQL.",
+  "github_file": {
+    "path": "notebooks/Data Team/Gold Table Creation/Signups - Merge.sql",
+    "content": "MERGE INTO acme_prod.reporting.signups AS target\nUSING (\n  WITH Signups AS (\n    SELECT rc.anonymous_id, rc.signup_stitch_id, rc.event_date AS signup_date,\n           rc.first_order_date AS first_order_date,\n           FLOOR(months_between(current_date(), rc.access_data_dob::date) / 12) AS age,\n           rc.access_data_dob::date AS dob,\n           ROW_NUMBER() OVER (PARTITION BY rc.anonymous_id ORDER BY rc.original_timestamp NULLS LAST) AS row_num,\n           SUM(CASE WHEN s.is_internal_ip = 1 OR s.is_bot = 1 THEN 1 ELSE 0 END)\n             OVER (PARTITION BY rc.anonymous_id) AS internal_sum\n    FROM acme_prod.app_server.signup_unified rc\n    LEFT JOIN lakehouse_production.shop.session_details s\n      ON s._anonymousId = rc.anonymous_id\n    WHERE rc.event_date >= current_date() - INTERVAL '30 days'\n  ),\n  SessionPageMetrics AS (\n    SELECT web_context_anonymous_id AS id, COUNT(DISTINCT web_context_session_id) AS session_count\n    FROM lakehouse_production.shop.rpt_session\n    WHERE _date >= current_date() - INTERVAL '30 days'\n    GROUP BY 1\n  ),\n  ReferralInfo AS (\n    SELECT anonymous_id, flow AS signup_flow, opt_in AS autofill_ind\n    FROM acme_prod.app_server.referral_created\n    WHERE context_source IS DISTINCT FROM 'mobile-app'\n      AND event_date >= current_date() - INTERVAL '30 days'\n    QUALIFY ROW_NUMBER() OVER (PARTITION BY anonymous_id ORDER BY original_timestamp DESC) = 1\n  )\n  SELECT rc.anonymous_id AS _anonymousId, rc.signup_stitch_id, rc.signup_date,\n         rc.first_order_date, spm.session_count, rc.age, rc.dob, hi.signup_flow, hi.autofill_ind\n  FROM Signups rc\n  LEFT JOIN SessionPageMetrics spm ON spm.id = rc.anonymous_id\n  LEFT JOIN ReferralInfo hi ON hi.anonymous_id = rc.anonymous_id\n  WHERE rc.row_num = 1 AND rc.internal_sum = 0\n) AS source\nON target._anonymousId = source._anonymousId\nWHEN MATCHED AND target.session_count < source.session_count\n  THEN UPDATE SET target.session_count = source.session_count\nWHEN NOT MATCHED THEN INSERT (_anonymousId, signup_stitch_id, signup_date, first_order_date, session_count, age, dob, signup_flow, autofill_ind)\nVALUES (source._anonymousId, source.signup_stitch_id, source.signup_date, source.first_order_date, source.session_count, source.age, source.dob, source.signup_flow, source.autofill_ind)"
+  },
+  "objects": {
+    "acme_prod.reporting.signups": {
+      "type": "MANAGED",
+      "comment": "One reporting row per anonymous browser identity that passed signup filters.",
+      "columns": [
+        ["_anonymousId", "STRING", "Anonymous browser or device identity", false],
+        ["signup_stitch_id", "STRING", "Signup stitching identifier", true],
+        ["signup_date", "DATE", "Signup event date", false],
+        ["first_order_date", "DATE", "First order date", true],
+        ["session_count", "BIGINT", "Observed session count", true],
+        ["pages_viewed", "BIGINT", "Observed page count", true],
+        ["age", "BIGINT", "Age captured when the row was inserted", true],
+        ["age_range", "STRING", "Age bucket captured when the row was inserted", true],
+        ["dob", "DATE", "Masked for the bot service principal", true],
+        ["signup_flow", "STRING", "Latest non-Mobile-App referral flow", true],
+        ["autofill_ind", "STRING", "Autofill classification", true],
+        ["device_type", "STRING", "Desktop, mobile, or tablet classification", true],
+        ["billing_zip", "STRING", "Billing ZIP code captured at signup", true],
+        ["shipping_zip", "STRING", "Shipping ZIP code captured at signup", true],
+        ["billing_state", "STRING", "Billing state", true],
+        ["shipping_state", "STRING", "Shipping state", true],
+        ["shipping_distance", "DOUBLE", "Shipping distance in miles between billing and shipping addresses", true],
+        ["basket_size", "STRING", "Basket size bucket", true],
+        ["loyalty_tier", "STRING", "Loyalty tier (basic or plus)", true],
+        ["household_size", "BIGINT", "Self-reported household size", true],
+        ["pre_order_ind", "BIGINT", "1 when the signup precedes the first order date (order_date_differential < 0)", true],
+        ["cross_state_ship_ind", "BIGINT", "1 when the billing and shipping states differ", true],
+        ["utm_source", "STRING", "Acquisition source of the registering session", true],
+        ["utm_medium", "STRING", "Acquisition medium of the registering session", true],
+        ["utm_campaign", "STRING", "Acquisition campaign of the registering session", true],
+        ["landing_page", "STRING", "First page of the registering session", true],
+        ["browser", "STRING", "Browser family of the registering session", true],
+        ["operating_system", "STRING", "Operating system of the registering session", true],
+        ["first_session_ts", "TIMESTAMP", "First observed session start", true],
+        ["last_session_ts", "TIMESTAMP", "Most recent observed session start", true],
+        ["signup_ts", "TIMESTAMP", "Signup event timestamp", true],
+        ["identification_method", "STRING", "Signup identification method; 'anonymous' begins 2026-08-03", true],
+        ["audience", "STRING", "Third-party audience assignment", true],
+        ["inserted_at", "TIMESTAMP", "When the reporting row was inserted", false],
+        ["updated_at", "TIMESTAMP", "When the reporting row was last updated", true]
+      ]
+    },
+    "system.access.table_lineage": {
+      "type": "SYSTEM_TABLE",
+      "comment": "Unity Catalog table-level lineage events.",
+      "columns": [
+        ["account_id", "STRING", "Databricks account ID"],
+        ["metastore_id", "STRING", "Unity Catalog metastore ID"],
+        ["workspace_id", "BIGINT", "Workspace ID"],
+        ["entity_type", "STRING", "Producing or consuming entity type: NOTEBOOK, JOB, PIPELINE, DASHBOARD_V3, DBSQL_DASHBOARD, DBSQL_QUERY, or NULL for ad-hoc access"],
+        ["entity_id", "STRING", "Producing or consuming entity ID"],
+        ["entity_run_id", "STRING", "Run ID of the producing or consuming entity"],
+        ["entity_metadata", "STRUCT<job_info: STRUCT<job_id: STRING, job_run_id: STRING>, dashboard_id: STRING, legacy_dashboard_id: STRING, notebook_id: STRING, sql_query_id: STRING, pipeline_id: STRING>", "Entity details; use dot notation such as entity_metadata.job_info.job_id"],
+        ["source_table_full_name", "STRING", "Source table"],
+        ["source_table_catalog", "STRING", "Source table catalog"],
+        ["source_table_schema", "STRING", "Source table schema"],
+        ["source_table_name", "STRING", "Source table name"],
+        ["source_path", "STRING", "Source cloud path when the read was not a table"],
+        ["source_type", "STRING", "Source object type"],
+        ["target_table_full_name", "STRING", "Target table"],
+        ["target_table_catalog", "STRING", "Target table catalog"],
+        ["target_table_schema", "STRING", "Target table schema"],
+        ["target_table_name", "STRING", "Target table name"],
+        ["target_path", "STRING", "Target cloud path when the write was not a table"],
+        ["target_type", "STRING", "Target object type"],
+        ["created_by", "STRING", "User email or service principal ID"],
+        ["event_time", "TIMESTAMP", "Lineage event timestamp"],
+        ["event_date", "DATE", "Lineage event date (partition column)"],
+        ["event_id", "STRING", "Lineage event ID; one query reading several sources shares one event_id"],
+        ["statement_id", "STRING", "Query statement ID; joinable to query history when populated"]
+      ]
+    },
+    "acme_prod.acme_history.databricks_workspace_jobs": {
+      "type": "TABLE",
+      "comment": "Append-only history of Databricks job definitions.",
+      "columns": [
+        ["version_ts", "TIMESTAMP", "When this job snapshot was taken"],
+        ["job_id", "STRING", "Databricks job identifier"],
+        ["job_name", "STRING", "Databricks job display name"],
+        ["job_status", "STRING", "Scheduled or deletion state at this snapshot"],
+        ["job_settings_json", "STRING", "Focused JSON job settings"],
+        ["job_json", "STRING", "Full JSON job definition"]
+      ]
+    },
+    "acme_prod.app_server.signup_unified": {
+      "type": "VIEW",
+      "comment": "Unified current signup events.",
+      "columns": [
+        ["anonymous_id", "STRING", "Anonymous signup identity"],
+        ["signup_stitch_id", "STRING", "Signup stitching identifier"],
+        ["event_date", "DATE", "Event date"],
+        ["original_timestamp", "TIMESTAMP", "Original event timestamp"],
+        ["first_order_date", "DATE", "First order date"],
+        ["access_data_dob", "STRING", "Date of birth payload"]
+      ]
+    },
+    "lakehouse_production.shop.session_details": {
+      "type": "TABLE",
+      "comment": "Session enrichment used for device and internal-traffic filtering.",
+      "columns": [
+        ["_anonymousId", "STRING", "Anonymous browser identity"],
+        ["is_internal_ip", "BIGINT", "Internal-IP flag"],
+        ["is_bot", "BIGINT", "Bot flag"],
+        ["is_desktop", "BIGINT", "Desktop flag"],
+        ["is_mobile", "BIGINT", "Mobile flag"]
+      ]
+    },
+    "lakehouse_production.shop.rpt_session": {
+      "type": "TABLE",
+      "comment": "Web session facts.",
+      "columns": [
+        ["web_context_anonymous_id", "STRING", "Anonymous browser identity"],
+        ["web_context_session_id", "STRING", "Session identifier"],
+        ["_date", "DATE", "Event date"]
+      ]
+    },
+    "acme_prod.app_server.referral_created": {
+      "type": "TABLE",
+      "comment": "Current event-pipeline Acme referral events.",
+      "columns": [
+        ["anonymous_id", "STRING", "Anonymous identity"],
+        ["flow", "STRING", "Signup flow"],
+        ["opt_in", "STRING", "Autofill opt-in value"],
+        ["context_source", "STRING", "Referral source"],
+        ["event_date", "DATE", "Event date"],
+        ["original_timestamp", "TIMESTAMP", "Original event timestamp"]
+      ]
+    }
+  },
+  "lineage_rows": [
+    ["acme_prod.app_server.signup_unified", "acme_prod.reporting.signups", "NOTEBOOK", "signups-merge"],
+    ["lakehouse_production.shop.session_details", "acme_prod.reporting.signups", "NOTEBOOK", "signups-merge"],
+    ["lakehouse_production.shop.rpt_session", "acme_prod.reporting.signups", "NOTEBOOK", "signups-merge"],
+    ["acme_prod.app_server.referral_created", "acme_prod.reporting.signups", "NOTEBOOK", "signups-merge"]
+  ],
+  "required_descriptions_before_query": [
+    "acme_prod.reporting.signups",
+    "system.access.table_lineage",
+    "acme_prod.app_server.signup_unified",
+    "lakehouse_production.shop.session_details",
+    "lakehouse_production.shop.rpt_session",
+    "acme_prod.app_server.referral_created"
+  ],
+  "required_analytical_objects": [
+    "acme_prod.reporting.signups",
+    "system.access.table_lineage"
+  ],
+  "required_successful_tools": [
+    "github_get_file_content",
+    "databricks_describe_object",
+    "databricks_execute_sql"
+  ],
+  "forbidden_identifier_scope": {
+    "table": "acme_prod.reporting.signups",
+    "identifiers": ["internal_sum"]
+  },
+  "required_final_patterns": [
+    "(?i)_anonymousid",
+    "(?is)(browser|device|anonymous).{0,100}(identity|identifier)|(?:identity|identifier).{0,100}(browser|device)"
+  ],
+  "forbidden_final_patterns": [
+    "(?is)age(?:_range)?.{0,60}recomput(?:e|ed|es|ing).{0,40}(?:every|each) run",
+    "(?is)(?:every|each) run.{0,40}recomput(?:e|ed|es|ing).{0,60}age(?:_range)?",
+    "(?is)age(?:_range)?.{0,60}(?:drifts|ages|advances).{0,40}(?:forward|over time)",
+    "(?is)(?:age|age_range).{0,80}(?:unusable|cannot be used|invalid).{0,50}(?:entire|whole|all rows|table)",
+    "(?is)(?:job|merge|refresh|run).{0,80}(?:runs?|scheduled|executes?|refreshes?|processes?).{0,30}(?:daily|each day|every day)",
+    "(?is)(?:daily|each day|every day).{0,30}(?:job|merge|refresh|run)",
+    "(?is)(?:Signups MA - Merge(?:\\.sql)?|\\bMA(?:-suffixed)?\\s+(?:notebook|merge|file|version)s?|Mobile[ -]App\\s+(?:notebook|merge|file|version)s?)(?:(?!\\b(?:no|not|never|historical|legacy|stale|old|deprecated|superseded|variant|other|instead|unused)\\b|Signups - Merge|[;)]).){0,80}\\b(?:(?:builds?|built|populates?|populated|maintains?|maintained|produces?|produced|loads?|loaded|writes?|written|creates?|created|defines?|defined|generates?|generated|refreshes?|refreshed|merges?\\s+into)\\b|(?:is|as)\\s+the\\s+(?:current|active|production|live|authoritative|primary|main|canonical)\\s+(?:source|build|notebook|logic|merge|version|SQL|code|definition)\\b)",
+    "(?is)\\b(?:built|populated|maintained|produced|loaded|written|created|defined|generated|refreshed|derived|sourced)\\s+(?:by|from|via|in|using|through)\\b(?:(?!\\b(?:no|not|never|historical|legacy|stale|old|deprecated|superseded|variant|other|instead|unused)\\b|Signups - Merge|[;)]).){0,60}(?:Signups MA - Merge(?:\\.sql)?|\\bMA(?:-suffixed)?\\s+(?:notebook|merge|file|version)s?|Mobile[ -]App\\s+(?:notebook|merge|file|version)s?)",
+    "(?is)\\b(?:current|active|production|live|authoritative|primary|main|canonical)\\s+(?:source|build|notebook|logic|merge|version|SQL|code|definition)\\b(?:(?!\\b(?:no|not|never|historical|legacy|stale|old|deprecated|superseded|variant|other|instead|unused)\\b|Signups - Merge|[;)]).){0,60}(?:Signups MA - Merge(?:\\.sql)?|\\bMA(?:-suffixed)?\\s+(?:notebook|merge|file|version)s?|Mobile[ -]App\\s+(?:notebook|merge|file|version)s?)",
+    "(?is)\\b(?:source|build\\s+(?:logic|SQL|notebook)|notebook|merge\\s+logic)\\s*:\\s*[`'\\\"]?(?:notebooks/[^`'\\\"\\n]{0,120}?)?Signups MA - Merge"
+  ]
+}

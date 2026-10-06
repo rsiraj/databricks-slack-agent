@@ -1,0 +1,50 @@
+[
+  {
+    "thread_ts": "synthetic-single",
+    "messages": [
+      {"role": "user", "content": "what tables feed the orders metric?"}
+    ]
+  },
+  {
+    "thread_ts": "synthetic-healthy-two-tools",
+    "messages": [
+      {"role": "user", "content": [{"type": "text", "text": "how many orders yesterday?"}]},
+      {"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "I should search the repo then query."},
+        {"type": "tool_use", "id": "t1", "name": "github_search_code", "input": {"query": "orders"}}
+      ]},
+      {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1",
+         "content": "{\"total_count\": 1, \"items\": [{\"path\": \"models/orders.sql\", \"sha\": \"abc\", \"html_url\": \"http://x\"}]}"}
+      ]},
+      {"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "now run the count"},
+        {"type": "tool_use", "id": "t2", "name": "databricks_execute_sql", "input": {"sql": "SELECT count(*) FROM orders"}}
+      ]},
+      {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t2",
+         "content": "{\"status\": \"SUCCEEDED\", \"columns\": [\"c\"], \"sample_rows\": [[4210]]}"}
+      ]},
+      {"role": "assistant", "content": [{"type": "text", "text": "There were 4,210 orders yesterday."}]}
+    ]
+  },
+  {
+    "thread_ts": "synthetic-wedged-orphan-tool-result",
+    "messages": [
+      {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t0", "content": "orphaned by an old trim"}
+      ]},
+      {"role": "assistant", "content": [{"type": "text", "text": "Here are the results..."}]},
+      {"role": "user", "content": [{"type": "text", "text": "what about the day before?"}]},
+      {"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "query again"},
+        {"type": "tool_use", "id": "t1", "name": "databricks_execute_sql", "input": {"sql": "SELECT count(*) FROM orders"}}
+      ]},
+      {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1",
+         "content": "{\"status\": \"SUCCEEDED\", \"columns\": [\"c\"], \"sample_rows\": [[3980]]}"}
+      ]},
+      {"role": "assistant", "content": [{"type": "text", "text": "3,980 the day before."}]}
+    ]
+  }
+]

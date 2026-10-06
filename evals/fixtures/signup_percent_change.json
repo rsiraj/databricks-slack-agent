@@ -1,0 +1,352 @@
+{
+  "id": "signup_percent_change",
+  "notes": "Reproduces in-head arithmetic: after two monthly aggregates come back from SQL the model must not compute the percent change itself. The synthetic execute_sql serves July 2026 = 12,480 and August 2026 = 13,977 signups for the common query shapes (month GROUP BY, one-row conditional counts, single-month counts, a LAG/percent computed in SQL). The exact change is 11.995192307692308% so a rounded figure is only accepted when it rounds from a tool value. Computing the percent in SQL is acceptable, so a missing calculate call is soft; an ungrounded figure is hard. Approximation markers (~, about, roughly) are judged by numeric_grounding rather than a blanket regex: an earlier CI run wrote '~28.6%' for a calculate result of 28.587 (result_display 28.6), which is rounding presentation of a grounded figure, not in-head arithmetic; only a hedged figure no tool supports fails (ungrounded_approximation, hard). an earlier CI run showed why the patterns must be anchored to month grain: a July 1-7 daily sanity-check query matched the generic GROUP BY pattern, was served the two monthly rows, and the model then refused to state the percent because the tool looked like placeholder data. Daily, weekly, sub-month, and single-day shapes now return a projection_not_modeled limitation instead. The one required_final_pattern (a percent figure) is promoted to hard via violation_severity because stating the percent change is the point of the scenario, not incidental coverage: an answer that gives both monthly totals but never states the percent has not answered the question.",
+  "user_prompt": "Compare signups in July 2026 vs August 2026 and tell me the percent change.",
+  "objects": {
+    "acme_prod.reporting.signups": {
+      "type": "MANAGED",
+      "comment": "One reporting row per anonymous browser identity that passed signup filters.",
+      "columns": [
+        [
+          "_anonymousId",
+          "STRING",
+          "Anonymous browser or device identity",
+          false
+        ],
+        [
+          "signup_stitch_id",
+          "STRING",
+          "Signup stitching identifier",
+          true
+        ],
+        [
+          "signup_date",
+          "DATE",
+          "Signup event date",
+          false
+        ],
+        [
+          "first_order_date",
+          "DATE",
+          "First order date",
+          true
+        ],
+        [
+          "session_count",
+          "BIGINT",
+          "Observed session count",
+          true
+        ],
+        [
+          "pages_viewed",
+          "BIGINT",
+          "Observed page count",
+          true
+        ],
+        [
+          "age",
+          "BIGINT",
+          "Age captured when the row was inserted",
+          true
+        ],
+        [
+          "age_range",
+          "STRING",
+          "Age bucket captured when the row was inserted",
+          true
+        ],
+        [
+          "dob",
+          "DATE",
+          "Masked for the bot service principal",
+          true
+        ],
+        [
+          "signup_flow",
+          "STRING",
+          "Latest non-Mobile-App referral flow",
+          true
+        ],
+        [
+          "autofill_ind",
+          "STRING",
+          "Autofill classification",
+          true
+        ],
+        [
+          "device_type",
+          "STRING",
+          "Desktop, mobile, or tablet classification",
+          true
+        ],
+        [
+          "billing_zip",
+          "STRING",
+          "Billing ZIP code captured at signup",
+          true
+        ],
+        [
+          "shipping_zip",
+          "STRING",
+          "Shipping ZIP code captured at signup",
+          true
+        ],
+        [
+          "billing_state",
+          "STRING",
+          "Billing state",
+          true
+        ],
+        [
+          "shipping_state",
+          "STRING",
+          "Shipping state",
+          true
+        ],
+        [
+          "shipping_distance",
+          "DOUBLE",
+          "Shipping distance in miles between billing and shipping addresses",
+          true
+        ],
+        [
+          "basket_size",
+          "STRING",
+          "Basket size bucket",
+          true
+        ],
+        [
+          "loyalty_tier",
+          "STRING",
+          "Loyalty tier (basic or plus)",
+          true
+        ],
+        [
+          "household_size",
+          "BIGINT",
+          "Self-reported household size",
+          true
+        ],
+        [
+          "pre_order_ind",
+          "BIGINT",
+          "1 when the signup precedes the first order date (order_date_differential < 0)",
+          true
+        ],
+        [
+          "cross_state_ship_ind",
+          "BIGINT",
+          "1 when the billing and shipping states differ",
+          true
+        ],
+        [
+          "utm_source",
+          "STRING",
+          "Acquisition source of the registering session",
+          true
+        ],
+        [
+          "utm_medium",
+          "STRING",
+          "Acquisition medium of the registering session",
+          true
+        ],
+        [
+          "utm_campaign",
+          "STRING",
+          "Acquisition campaign of the registering session",
+          true
+        ],
+        [
+          "landing_page",
+          "STRING",
+          "First page of the registering session",
+          true
+        ],
+        [
+          "browser",
+          "STRING",
+          "Browser family of the registering session",
+          true
+        ],
+        [
+          "operating_system",
+          "STRING",
+          "Operating system of the registering session",
+          true
+        ],
+        [
+          "first_session_ts",
+          "TIMESTAMP",
+          "First observed session start",
+          true
+        ],
+        [
+          "last_session_ts",
+          "TIMESTAMP",
+          "Most recent observed session start",
+          true
+        ],
+        [
+          "signup_ts",
+          "TIMESTAMP",
+          "Signup event timestamp",
+          true
+        ],
+        [
+          "identification_method",
+          "STRING",
+          "Signup identification method; 'anonymous' begins 2026-08-03",
+          true
+        ],
+        [
+          "audience",
+          "STRING",
+          "Third-party audience assignment",
+          true
+        ],
+        [
+          "inserted_at",
+          "TIMESTAMP",
+          "When the reporting row was inserted",
+          false
+        ],
+        [
+          "updated_at",
+          "TIMESTAMP",
+          "When the reporting row was last updated",
+          true
+        ]
+      ]
+    }
+  },
+  "sql_results": [
+    {
+      "description": "Percent change computed inside SQL (LAG or explicit *100).",
+      "pattern": "^(?!.*information_schema)(?!.*(?:\\bdays?\\b|\\bdaily\\b|\\bweeks?\\b|\\bweekly\\b|\\bdayofweek\\b))(?=.*\\bsignups\\b)(?=.*\\bcount(?:_if)?\\s*\\().*(?:\\blag\\s*\\(|\\*\\s*100(?:\\.0+)?\\b|\\b100(?:\\.0+)?\\s*\\*|pct|percent|change)",
+      "columns": [
+        "month",
+        "signups",
+        "previous_month_signups",
+        "pct_change"
+      ],
+      "rows": [
+        [
+          "2026-07",
+          12480,
+          null,
+          null
+        ],
+        [
+          "2026-08",
+          13977,
+          12480,
+          11.995192307692308
+        ]
+      ]
+    },
+    {
+      "description": "Two conditional aggregates in one row (July first, August second).",
+      "pattern": "^(?!.*information_schema)(?=.*\\bsignups\\b)(?=.*\\bcount(?:_if)?\\s*\\()(?!.*\\bgroup by\\b).*(?:count|sum|count_if)\\s*\\((?:\\s*distinct)?\\s*(?:case\\b|if\\s*\\(|\\w+\\s*(?:>=|<=|=|<|>|between|like|in\\b)).*(?:count|sum|count_if)\\s*\\((?:\\s*distinct)?\\s*(?:case\\b|if\\s*\\(|\\w+\\s*(?:>=|<=|=|<|>|between|like|in\\b))",
+      "columns": [
+        "july_2026_signups",
+        "august_2026_signups"
+      ],
+      "rows": [
+        [
+          12480,
+          13977
+        ]
+      ]
+    },
+    {
+      "description": "Signups grouped by month (a month expression is required; day/week grains fall through).",
+      "pattern": "^(?!.*information_schema)(?!.*(?:\\bdays?\\b|\\bdaily\\b|\\bweeks?\\b|\\bweekly\\b|\\bdayofweek\\b))(?=.*\\bsignups\\b)(?=.*\\bcount(?:_if)?\\s*\\()(?=.*(?:\\bmonth\\b|\\bmon\\b|'yyyy-mm(?:-01)?'|'mmm|'mm')).*\\bgroup by\\b",
+      "columns": [
+        "month",
+        "signups"
+      ],
+      "rows": [
+        [
+          "2026-07",
+          12480
+        ],
+        [
+          "2026-08",
+          13977
+        ]
+      ]
+    },
+    {
+      "description": "July 2026 only.",
+      "pattern": "^(?!.*information_schema)(?!.*\\bgroup by\\b)(?!.*'2026-\\d\\d-(?!01'|30'|31')\\d\\d')(?!.*\\bsignup_date\\s*=\\s*(?:date\\s*|timestamp\\s*)?'2026-\\d\\d-\\d\\d)(?=.*\\bsignups\\b)(?=.*\\bcount(?:_if)?\\s*\\()(?!.*(?:>=?\\s*(?:date\\s*|timestamp\\s*)?'2026-08|2026-08-(?:0[2-9]|[12]\\d|3[01])|2026-08[%']|'2026-09|month\\s*\\(\\s*\\w+\\s*\\)\\s*=\\s*8\\b|'august'|'aug')).*(?:>=?\\s*(?:date\\s*|timestamp\\s*)?'2026-07|2026-07-(?:0[2-9]|[12]\\d|3[01])|2026-07[%']|month\\s*\\(\\s*\\w+\\s*\\)\\s*=\\s*7\\b|'july'|'jul')",
+      "columns": [
+        "signups"
+      ],
+      "rows": [
+        [
+          12480
+        ]
+      ]
+    },
+    {
+      "description": "August 2026 only.",
+      "pattern": "^(?!.*information_schema)(?!.*\\bgroup by\\b)(?!.*'2026-\\d\\d-(?!01'|30'|31')\\d\\d')(?!.*\\bsignup_date\\s*=\\s*(?:date\\s*|timestamp\\s*)?'2026-\\d\\d-\\d\\d)(?=.*\\bsignups\\b)(?=.*\\bcount(?:_if)?\\s*\\()(?!.*(?:>=?\\s*(?:date\\s*|timestamp\\s*)?'2026-07|2026-07-(?:0[2-9]|[12]\\d|3[01])|2026-07[%']|month\\s*\\(\\s*\\w+\\s*\\)\\s*=\\s*7\\b|'july'|'jul')).*(?:>=?\\s*(?:date\\s*|timestamp\\s*)?'2026-08|2026-08-(?:0[2-9]|[12]\\d|3[01])|2026-08[%']|'2026-09|month\\s*\\(\\s*\\w+\\s*\\)\\s*=\\s*8\\b|'august'|'aug')",
+      "columns": [
+        "signups"
+      ],
+      "rows": [
+        [
+          13977
+        ]
+      ]
+    },
+    {
+      "description": "Both months without a month breakdown: the two-month total.",
+      "pattern": "^(?!.*information_schema)(?!.*\\bgroup by\\b)(?!.*'2026-\\d\\d-(?!01'|30'|31')\\d\\d')(?!.*\\bsignup_date\\s*=\\s*(?:date\\s*|timestamp\\s*)?'2026-\\d\\d-\\d\\d)(?=.*\\bsignups\\b)(?=.*\\bcount(?:_if)?\\s*\\()(?=.*(?:2026|july|august|month)).*",
+      "columns": [
+        "signups"
+      ],
+      "rows": [
+        [
+          26457
+        ]
+      ]
+    },
+    {
+      "description": "Any other grouped or date-scoped count over signups (daily or weekly breakdowns, sub-month ranges, single days): an honest projection_not_modeled limitation instead of rows meant for another grain. Non-count coverage checks such as MAX(signup_date) still reach the scenario fallback.",
+      "pattern": "^(?!.*information_schema)(?=.*\\bsignups\\b)(?=.*(?:\\bgroup by\\b|\\bcount(?:_if)?\\s*\\())(?=.*(?:\\bgroup by\\b|\\bsignup_date\\s*(?:=|!=|<>|>=?|<=?|\\bbetween\\b|\\bin\\b|\\blike\\b)))",
+      "unmodeled": true,
+      "result_scope": "This signups query grain (daily, weekly, sub-month, or single-day) is not modeled by the synthetic fixture; only July 2026 and August 2026 monthly totals are."
+    }
+  ],
+  "required_descriptions_before_query": [
+    "acme_prod.reporting.signups"
+  ],
+  "required_analytical_objects": [
+    "acme_prod.reporting.signups"
+  ],
+  "required_successful_tools": [
+    "databricks_execute_sql"
+  ],
+  "required_tool_calls": [
+    {
+      "tool": "calculate",
+      "min": 1
+    }
+  ],
+  "required_final_numbers": [
+    "12480",
+    "13977"
+  ],
+  "required_final_patterns": [
+    "\\d+(?:\\.\\d+)?\\s?(?:%|percent)"
+  ],
+  "forbidden_final_patterns": [],
+  "numeric_grounding": true,
+  "violation_severity": {
+    "required_tool_missing": "soft",
+    "ungrounded_number": "hard",
+    "missing_answer_fact": "hard"
+  }
+}

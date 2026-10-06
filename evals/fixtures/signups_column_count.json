@@ -1,0 +1,245 @@
+{
+  "id": "signups_column_count",
+  "notes": "Reproduces a production answer that reported 36 columns for a 35-column table. The model echoed the row_count of the metadata result set (35 column rows plus one table row) instead of quoting column_count from databricks_describe_object. The synthetic describe serves exactly 35 typed columns (3 NOT NULL), so the only route to 36 is counting result rows or arithmetic in the model's head. No SQL is required; the answer must quote 35, must not mention 36, and every figure must be grounded in a tool result.",
+  "user_prompt": "How many columns does acme_prod.reporting.signups have, and which of them are nullable?",
+  "objects": {
+    "acme_prod.reporting.signups": {
+      "type": "MANAGED",
+      "comment": "One reporting row per anonymous browser identity that passed signup filters.",
+      "columns": [
+        [
+          "_anonymousId",
+          "STRING",
+          "Anonymous browser or device identity",
+          false
+        ],
+        [
+          "signup_stitch_id",
+          "STRING",
+          "Signup stitching identifier",
+          true
+        ],
+        [
+          "signup_date",
+          "DATE",
+          "Signup event date",
+          false
+        ],
+        [
+          "first_order_date",
+          "DATE",
+          "First order date",
+          true
+        ],
+        [
+          "session_count",
+          "BIGINT",
+          "Observed session count",
+          true
+        ],
+        [
+          "pages_viewed",
+          "BIGINT",
+          "Observed page count",
+          true
+        ],
+        [
+          "age",
+          "BIGINT",
+          "Age captured when the row was inserted",
+          true
+        ],
+        [
+          "age_range",
+          "STRING",
+          "Age bucket captured when the row was inserted",
+          true
+        ],
+        [
+          "dob",
+          "DATE",
+          "Masked for the bot service principal",
+          true
+        ],
+        [
+          "signup_flow",
+          "STRING",
+          "Latest non-Mobile-App referral flow",
+          true
+        ],
+        [
+          "autofill_ind",
+          "STRING",
+          "Autofill classification",
+          true
+        ],
+        [
+          "device_type",
+          "STRING",
+          "Desktop, mobile, or tablet classification",
+          true
+        ],
+        [
+          "billing_zip",
+          "STRING",
+          "Billing ZIP code captured at signup",
+          true
+        ],
+        [
+          "shipping_zip",
+          "STRING",
+          "Shipping ZIP code captured at signup",
+          true
+        ],
+        [
+          "billing_state",
+          "STRING",
+          "Billing state",
+          true
+        ],
+        [
+          "shipping_state",
+          "STRING",
+          "Shipping state",
+          true
+        ],
+        [
+          "shipping_distance",
+          "DOUBLE",
+          "Shipping distance in miles between billing and shipping addresses",
+          true
+        ],
+        [
+          "basket_size",
+          "STRING",
+          "Basket size bucket",
+          true
+        ],
+        [
+          "loyalty_tier",
+          "STRING",
+          "Loyalty tier (basic or plus)",
+          true
+        ],
+        [
+          "household_size",
+          "BIGINT",
+          "Self-reported household size",
+          true
+        ],
+        [
+          "pre_order_ind",
+          "BIGINT",
+          "1 when the signup precedes the first order date (order_date_differential < 0)",
+          true
+        ],
+        [
+          "cross_state_ship_ind",
+          "BIGINT",
+          "1 when the billing and shipping states differ",
+          true
+        ],
+        [
+          "utm_source",
+          "STRING",
+          "Acquisition source of the registering session",
+          true
+        ],
+        [
+          "utm_medium",
+          "STRING",
+          "Acquisition medium of the registering session",
+          true
+        ],
+        [
+          "utm_campaign",
+          "STRING",
+          "Acquisition campaign of the registering session",
+          true
+        ],
+        [
+          "landing_page",
+          "STRING",
+          "First page of the registering session",
+          true
+        ],
+        [
+          "browser",
+          "STRING",
+          "Browser family of the registering session",
+          true
+        ],
+        [
+          "operating_system",
+          "STRING",
+          "Operating system of the registering session",
+          true
+        ],
+        [
+          "first_session_ts",
+          "TIMESTAMP",
+          "First observed session start",
+          true
+        ],
+        [
+          "last_session_ts",
+          "TIMESTAMP",
+          "Most recent observed session start",
+          true
+        ],
+        [
+          "signup_ts",
+          "TIMESTAMP",
+          "Signup event timestamp",
+          true
+        ],
+        [
+          "identification_method",
+          "STRING",
+          "Signup identification method; 'anonymous' begins 2026-08-03",
+          true
+        ],
+        [
+          "audience",
+          "STRING",
+          "Third-party audience assignment",
+          true
+        ],
+        [
+          "inserted_at",
+          "TIMESTAMP",
+          "When the reporting row was inserted",
+          false
+        ],
+        [
+          "updated_at",
+          "TIMESTAMP",
+          "When the reporting row was last updated",
+          true
+        ]
+      ]
+    }
+  },
+  "required_descriptions_before_query": [
+    "acme_prod.reporting.signups"
+  ],
+  "required_successful_tools": [
+    "databricks_describe_object"
+  ],
+  "required_final_patterns": [
+    "(?i)nullable"
+  ],
+  "forbidden_final_patterns": [
+    "(?is)\\ball\\s+(?:35\\s+|of\\s+(?:the\\s+)?(?:35\\s+)?)?columns\\s+(?:are|is)\\s+nullable"
+  ],
+  "required_final_numbers": [
+    "35"
+  ],
+  "forbidden_final_numbers": [
+    "36"
+  ],
+  "numeric_grounding": true,
+  "violation_severity": {
+    "ungrounded_number": "hard"
+  }
+}

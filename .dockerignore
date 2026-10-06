@@ -1,0 +1,29 @@
+# Allowlist: ignore everything, then re-include only what the image needs.
+*
+!Dockerfile
+!pyproject.toml
+!uv.lock
+!receiver.py
+!worker.py
+!tools/
+!tools/**
+!utils/
+!utils/**
+!prompts/
+!prompts/**
+!config/
+!config/**
+
+# Explicit denies (last match wins) so nothing under the re-included trees leaks in.
+.git
+.venv
+tests
+evals
+scripts
+infrastructure
+docs
+*.pdf
+**/__pycache__
+**/*.pyc
+.pytest_cache
+**/.pytest_cache

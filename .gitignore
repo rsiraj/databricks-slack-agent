@@ -1,0 +1,39 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.DS_Store
+security_review.pdf
+
+# Tool caches and local editor/agent state.
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+*.egg-info/
+.claude/
+
+# Scripts (.py) are tracked; their generated outputs contain real conversation
+# data (user messages, SQL results) and must never be committed.
+scripts/exports/
+scripts/sessions_export.*
+scripts/sessions_compacted.json
+scripts/compaction_report.md
+scripts/guard_*
+scripts/tool_reliability_*
+scripts/feedback_*
+scripts/catalog.json
+
+# Synthetic model-evaluation artifacts (no production data, generated in CI/local runs).
+eval-results/
+
+# Terraform local state and instance-specific configuration.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+infrastructure/terraform.tfvars
+infrastructure/*.auto.tfvars
+infrastructure/backend.tf

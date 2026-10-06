@@ -1,0 +1,38 @@
+[project]
+name = "databricks-slack-agent"
+version = "0.0.0"
+description = "Slack data assistant backed by Databricks (receiver + worker Lambdas)"
+readme = "README.md"
+# The Lambda base image is public.ecr.aws/lambda/python:3.12 (Dockerfile). Keep
+# the resolver on the same minor so uv.lock only ever contains 3.12 wheels.
+requires-python = ">=3.12,<3.13"
+
+# Runtime dependencies. These are the only packages installed into the Lambda
+# image (Dockerfile exports the non-dev subset of uv.lock).
+dependencies = [
+    "anthropic>=1.3,<2",
+    # Second model provider (utils/llm/openai_provider.py, Responses API). Only the
+    # evaluation harness holds a key today; production still needs openai_api_key in
+    # the app secret before LLM_PROVIDER=openai can start (docs/PROVIDERS.md).
+    "openai>=3.8,<4",
+    "slack_sdk>=3.44.1,<4",
+    "requests>=2.34.2,<3",
+    "boto3>=1.43.88,<2",
+    # 4.x removed the legacy `pythonjsonlogger.jsonlogger` shim; utils/clients.py
+    # imports `pythonjsonlogger.json` (available since 3.1).
+    "python-json-logger>=4.2.0,<5",
+    "sqlglot==30.18.0",
+    "pyyaml>=6.0.3,<7",
+]
+
+# Test-only dependencies. Never installed into the Lambda container image.
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "pytest-mock==3.15.1",
+]
+
+[tool.uv]
+# This repository is an application, not an installable package: there is no
+# build backend and `uv sync` / `uv export` must never try to build or emit it.
+package = false

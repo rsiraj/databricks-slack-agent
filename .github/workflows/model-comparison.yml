@@ -1,0 +1,164 @@
+name: Model comparison
+
+# Manual model / effort comparison on the synthetic conversation fixtures.
+# Produces eval-results/summary.md (pass rate, graded score, cost per run,
+# latency percentiles, violation histogram) per (provider, model, effort) cell
+# and uploads every per-run trace. Never fails on behavioral violations: the
+# point is to compare, not to gate (infrastructure errors exit 2). The uploaded
+# artifact is also the input for re-baselining the PR gate without spending
+# again: `python -m evals.run --from-results <dir> --models <provider>:<model>
+# --efforts <effort> --write-baseline evals/baseline.json`. See evals/README.md
+# ("The PR gate", "Running a comparison from GitHub"), and docs/PROVIDERS.md.
+#
+# Model ids may be provider-qualified (anthropic:claude-sonnet-4-6,
+# openai:gpt-5.6-terra) so one run compares vendors in a single table; bare ids
+# use the `provider` input. Each provider needs its own evaluation-only key
+# (MODEL_EVAL_ANTHROPIC_API_KEY / MODEL_EVAL_OPENAI_API_KEY); cells for a
+# provider without a key are recorded as infrastructure errors, not failures.
+
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "Comma-separated model ids, optionally <provider>:<model> (e.g. anthropic:claude-sonnet-4-6,openai:gpt-5.6-terra)"
+        required: true
+        default: "anthropic:claude-sonnet-5,anthropic:claude-sonnet-4-6"
+        type: string
+      efforts:
+        description: "Comma-separated effort levels (low, medium, high, xhigh, max)"
+        required: true
+        default: "medium,high"
+        type: string
+      repeats:
+        description: "Runs per (model, effort, scenario)"
+        required: true
+        default: "3"
+        type: string
+      scenarios:
+        description: "Comma-separated fixture names (empty = every fixture in evals/fixtures)"
+        required: false
+        default: ""
+        type: string
+      provider:
+        description: "Provider for bare (unqualified) model ids"
+        required: true
+        default: "anthropic"
+        type: choice
+        options:
+          - anthropic
+          - openai
+      concurrency:
+        description: "Thread pool size (keep low for the eval key's rate limit)"
+        required: true
+        default: "2"
+        type: string
+
+permissions:
+  contents: read
+
+# One comparison at a time: the spend-capped eval key has a narrow rate limit
+# and two matrices would skew each other's latency numbers.
+concurrency:
+  group: model-comparison
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: Model / effort matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      # Evaluation-only keys, one per provider. Neither is the bot's app secret;
+      # production still has no openai_api_key (docs/PROVIDERS.md).
+      MODEL_EVAL_ANTHROPIC_API_KEY: ${{ secrets.MODEL_EVAL_ANTHROPIC_API_KEY }}
+      MODEL_EVAL_OPENAI_API_KEY: ${{ secrets.MODEL_EVAL_OPENAI_API_KEY }}
+      # Same dummy AWS credentials as the PR eval job: the evaluator never
+      # touches AWS, but the worker modules it imports build boto3 clients.
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: testing
+      AWS_SECRET_ACCESS_KEY: testing
+      AWS_SESSION_TOKEN: testing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # Runtime dependencies only, same as the PR eval job. Keep UV_VERSION in step
+      # with ARG UV_VERSION in the Dockerfile.
+      - name: Install locked dependencies
+        env:
+          UV_VERSION: "0.10.6"
+        run: |
+          python -m pip install --no-cache-dir "uv==${UV_VERSION}"
+          uv sync --locked --no-dev
+
+      # At least one evaluation key must be present; a provider named in the
+      # matrix without its key is reported per cell by evals.run as errored.
+      # The diagnostic prints each key's name and length only (never a value or
+      # prefix) so a 401 in the matrix can be told apart from a truncated or
+      # whitespace-padded secret without anyone reading the secret.
+      - name: Require a dedicated evaluation key
+        run: |
+          set -uo pipefail
+          for name in MODEL_EVAL_ANTHROPIC_API_KEY MODEL_EVAL_OPENAI_API_KEY; do
+            value="${!name}"
+            if [ -z "$value" ]; then
+              echo "$name: unset"
+              continue
+            fi
+            len=${#value}
+            echo "$name: set (len=$len)"
+            if [ "$len" -lt 20 ]; then
+              echo "::warning::$name is suspiciously short (len=$len); expected a full API key"
+            fi
+            if [ "$value" != "${value%[[:space:]]}" ] || [ "$value" != "${value#[[:space:]]}" ]; then
+              echo "::warning::$name has leading or trailing whitespace; the secret was likely pasted with a newline"
+            fi
+          done
+          test -n "$MODEL_EVAL_ANTHROPIC_API_KEY" || test -n "$MODEL_EVAL_OPENAI_API_KEY"
+
+      - name: Run model / effort matrix
+        env:
+          INPUT_MODELS: ${{ inputs.models }}
+          INPUT_EFFORTS: ${{ inputs.efforts }}
+          INPUT_REPEATS: ${{ inputs.repeats }}
+          INPUT_SCENARIOS: ${{ inputs.scenarios }}
+          INPUT_PROVIDER: ${{ inputs.provider }}
+          INPUT_CONCURRENCY: ${{ inputs.concurrency }}
+        run: |
+          set -euo pipefail
+          args=(
+            --models "$INPUT_MODELS"
+            --efforts "$INPUT_EFFORTS"
+            --repeats "$INPUT_REPEATS"
+            --provider "$INPUT_PROVIDER"
+            --concurrency "$INPUT_CONCURRENCY"
+            --no-fail-on-violation
+            --output-dir eval-results
+          )
+          if [ -n "$INPUT_SCENARIOS" ]; then
+            args+=(--scenarios "$INPUT_SCENARIOS")
+          fi
+          uv run --locked --no-dev python -m evals.run "${args[@]}"
+
+      - name: Publish summary
+        if: always()
+        run: |
+          if [ -f eval-results/summary.md ]; then
+            cat eval-results/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No eval-results/summary.md was produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload sanitized evaluation traces
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: model-comparison-results
+          path: eval-results/
+          if-no-files-found: warn
+          retention-days: 14

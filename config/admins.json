@@ -1,0 +1,6 @@
+{
+  "_comment": "Slack user IDs of bot admins. The bot stays in any channel where at least one of these users is a member, and auto-leaves any channel where none are. The IDs below are PLACEHOLDERS: replace them with real IDs (profile -> three dots -> Copy member ID) before deploying. Updates go through PR review.",
+  "admin_user_ids": [
+    "U00000000001"
+  ]
+}

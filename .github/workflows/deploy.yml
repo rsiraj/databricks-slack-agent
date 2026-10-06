@@ -1,0 +1,172 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to deploy (e.g. main-abc1234). Leave blank to build from current main.'
+        required: false
+        default: ''
+
+permissions:
+  id-token: write
+  contents: read
+
+# Only one production deploy at a time. Queued runs wait rather than cancel so a
+# rollback dispatched during a merge deploy still lands (in order).
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+# Deployments set these as GitHub repository variables (Settings > Secrets and
+# variables > Actions > Variables). AWS_DEPLOY_ROLE_ARN has no fallback: the deploy
+# job is skipped until it is configured (see docs/SETUP.md).
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  APP_NAME: ${{ vars.APP_NAME || 'databricks-slack-agent' }}
+  AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+  DEPLOY_ENVIRONMENT: ${{ vars.DEPLOY_ENVIRONMENT || 'production' }}
+  # Keep in step with ARG UV_VERSION in the Dockerfile and pr-check.yml.
+  UV_VERSION: "0.10.6"
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # Same install as pr-check.yml; `--locked` fails if uv.lock is stale.
+      - name: Install locked dependencies
+        run: |
+          python -m pip install --no-cache-dir "uv==${UV_VERSION}"
+          uv sync --locked
+
+      - name: Run unit tests
+        run: uv run --locked pytest -q
+
+  deploy:
+    name: Build, push, and update both Lambdas
+    needs: test
+    # Skipped (not failed) until a deploy role is configured for this repository.
+    if: ${{ vars.AWS_DEPLOY_ROLE_ARN != '' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ vars.DEPLOY_ENVIRONMENT || 'production' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate image_tag input
+        env:
+          INPUT_TAG: ${{ github.event.inputs.image_tag }}
+        run: |
+          if [ -n "$INPUT_TAG" ] && ! printf '%s' "$INPUT_TAG" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'; then
+            echo "::error::image_tag '$INPUT_TAG' is not a valid image tag (expected e.g. main-abc1234)."
+            exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr-login
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
+
+      - name: Resolve image tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.image_tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=main-${SHA:0:7}" >> "$GITHUB_OUTPUT"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push image
+        if: steps.tag.outputs.build == 'true'
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          IMAGE="$REGISTRY/$APP_NAME"
+          # Lambda rejects OCI image indexes; disable provenance/SBOM attestations
+          # so BuildKit produces a single-platform manifest.
+          docker build --provenance=false --sbom=false \
+            -t "$IMAGE:$IMAGE_TAG" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$IMAGE_TAG"
+          docker push "$IMAGE:latest"
+
+      - name: Update Lambdas
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+          RECEIVER_FUNCTION: ${{ env.APP_NAME }}-receiver
+          WORKER_FUNCTION: ${{ env.APP_NAME }}-worker
+        run: |
+          IMAGE_URI="$REGISTRY/$APP_NAME:$IMAGE_TAG"
+          echo "Deploying $IMAGE_URI"
+
+          # update-function-code only swaps the image; ImageConfig.Command (the
+          # per-function handler) is managed by Terraform and is not touched here.
+          for FN in "$RECEIVER_FUNCTION" "$WORKER_FUNCTION"; do
+            aws lambda update-function-code \
+              --function-name "$FN" \
+              --image-uri "$IMAGE_URI" \
+              --region "$AWS_REGION" >/dev/null
+          done
+
+      - name: Verify deployment
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+          RECEIVER_FUNCTION: ${{ env.APP_NAME }}-receiver
+          WORKER_FUNCTION: ${{ env.APP_NAME }}-worker
+        run: |
+          IMAGE_URI="$REGISTRY/$APP_NAME:$IMAGE_TAG"
+          FAILED=0
+
+          for FN in "$RECEIVER_FUNCTION" "$WORKER_FUNCTION"; do
+            aws lambda wait function-updated \
+              --function-name "$FN" \
+              --region "$AWS_REGION"
+
+            read -r STATE STATUS REASON <<<"$(aws lambda get-function-configuration \
+              --function-name "$FN" \
+              --region "$AWS_REGION" \
+              --query '[State, LastUpdateStatus, LastUpdateStatusReason]' \
+              --output text)"
+            DEPLOYED_URI="$(aws lambda get-function \
+              --function-name "$FN" \
+              --region "$AWS_REGION" \
+              --query 'Code.ImageUri' \
+              --output text)"
+
+            echo "$FN: State=$STATE LastUpdateStatus=$STATUS ImageUri=$DEPLOYED_URI"
+
+            if [ "$STATE" != "Active" ] || [ "$STATUS" != "Successful" ]; then
+              echo "::error::$FN is not healthy after update (State=$STATE, LastUpdateStatus=$STATUS, Reason=$REASON)"
+              FAILED=1
+            fi
+            if [ "$DEPLOYED_URI" != "$IMAGE_URI" ]; then
+              echo "::error::$FN is running $DEPLOYED_URI, expected $IMAGE_URI"
+              FAILED=1
+            fi
+          done
+
+          if [ "$FAILED" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Deploy complete: both Lambdas now on $IMAGE_TAG"

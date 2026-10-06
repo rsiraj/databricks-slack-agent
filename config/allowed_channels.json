@@ -1,0 +1,6 @@
+{
+  "_comment": "Slack channel IDs the bot is permitted to operate in. Only the keys are functional; the values are descriptive names for human review. The bot leaves any channel not on this list, and at runtime also refuses any channel that resolves as public via conversations.info. Only PRIVATE channels should be listed. The ID below is a PLACEHOLDER: replace it with your own private channel ID before deploying. Updates go through PR review.",
+  "allowed_channels": {
+    "C00000000001": "#example-private-channel"
+  }
+}

@@ -1,0 +1,18 @@
+# Rename this file to backend.tf and configure it before the first production
+# apply. Local state is convenient for testing but should not be the long-term
+# source of truth for a shared bot.
+#
+# Example S3 backend:
+#
+# terraform {
+#   backend "s3" {
+#     bucket       = "REPLACE_ME-terraform-state"
+#     key          = "data-assistant/terraform.tfstate"
+#     region       = "us-east-1"
+#     encrypt      = true
+#     use_lockfile = true
+#   }
+# }
+#
+# Terraform Cloud users can instead connect a workspace to this repository with
+# infrastructure/ as the working directory; no backend block is needed here.

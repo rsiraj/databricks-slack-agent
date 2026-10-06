@@ -1,0 +1,203 @@
+name: PR Check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Keep UV_VERSION in step with ARG UV_VERSION in the Dockerfile.
+env:
+  UV_VERSION: "0.10.6"
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # `uv sync --locked` fails if uv.lock is out of date with pyproject.toml, so a
+      # constraint change without a lock update can never pass CI.
+      - name: Install locked dependencies
+        run: |
+          python -m pip install --no-cache-dir "uv==${UV_VERSION}"
+          uv sync --locked
+
+      - name: Run unit tests
+        run: uv run --locked pytest -q
+
+  # Decides whether this PR can change model behavior at all. Only then is the
+  # (paid, ~5-8 minute) conversation evaluation worth running; a docs-only or
+  # unrelated-dependency PR skips it, and a skipped required check counts as
+  # passing for branch protection. The decision is `evals/gate_scope.py`
+  # (stdlib only, unit-tested): prompts/**, tools/**, utils/**, worker.py,
+  # evals/**, this workflow, and pyproject.toml/uv.lock only when the
+  # `anthropic` or `openai` pin differs between base and head.
+  eval-scope:
+    name: Evaluation scope
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+      reason: ${{ steps.scope.outputs.reason }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history so the merge base with the PR base branch is available.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Decide whether the PR can change model behavior
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python -m evals.gate_scope --base "$BASE_SHA" --head "$HEAD_SHA"
+
+  conversation-evals:
+    name: Conversation evaluations
+    needs: [test, eval-scope]
+    # Dependabot-triggered `pull_request` runs receive no repository secrets, so the
+    # "Require dedicated evaluation key" step below can never pass on a Dependabot PR.
+    # Skip the job there: a skipped required check counts as passing for branch
+    # protection. Consequence: any bump of `anthropic` (or of prompts/tools/model
+    # config) must also be validated on a maintainer-pushed branch, or by running
+    # this workflow from a maintainer context (`gh workflow run`), so the eval runs
+    # with the key. See evals/README.md ("Dependabot PRs").
+    #
+    # Also skipped when `eval-scope` found nothing that can change model behavior.
+    if: github.actor != 'dependabot[bot]' && needs.eval-scope.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      MODEL_EVAL_ANTHROPIC_API_KEY: ${{ secrets.MODEL_EVAL_ANTHROPIC_API_KEY }}
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: testing
+      AWS_SECRET_ACCESS_KEY: testing
+      AWS_SESSION_TOKEN: testing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The repository ships without a recorded baseline (pass rates come from paid
+      # model runs). Until one is committed, the gate has nothing to judge against,
+      # so it is skipped with a notice instead of failing every PR. Record one with
+      # `python -m evals.run --write-baseline evals/baseline.json` (evals/README.md).
+      - name: Check for a recorded baseline
+        id: baseline
+        run: |
+          if [ -f evals/baseline.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Conversation evaluations skipped::evals/baseline.json is not recorded yet; see evals/README.md to record one and enable the gate."
+          fi
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.baseline.outputs.present == 'true'
+        with:
+          python-version: "3.12"
+
+      # Runtime dependencies only: the same set the Lambda image is built from.
+      - name: Install locked dependencies
+        if: steps.baseline.outputs.present == 'true'
+        run: |
+          python -m pip install --no-cache-dir "uv==${UV_VERSION}"
+          uv sync --locked --no-dev
+
+      # A missing key is an infrastructure problem, never a behavioral verdict:
+      # label it as such in the check annotations and use the infra exit code.
+      - name: Require dedicated evaluation key
+        if: steps.baseline.outputs.present == 'true'
+        run: |
+          if [ -z "$MODEL_EVAL_ANTHROPIC_API_KEY" ]; then
+            echo "::error title=Conversation evaluations: infrastructure error::MODEL_EVAL_ANTHROPIC_API_KEY is not available to this run (not a behavioral regression)."
+            exit 2
+          fi
+
+      # Every fixture, 3 repeats each, judged against the committed baseline by the
+      # regression rule in evals/regression.py. The runner picks the baseline entry
+      # for the (provider, model, effort) it ran. Exit 0 = pass, 1 = regression
+      # relative to that entry (or a scenario the entry lacks), 2 = cannot judge:
+      # an infrastructure error (provider 5xx/429/timeout after retries) or no
+      # baseline entry for this model/effort. Cost is roughly $1-2.50 and 5-8
+      # minutes per gated PR at ~$0.26 per conversation. The verdict table is
+      # appended to the step summary by the runner itself.
+      - name: Run conversation evaluation against the baseline
+        id: gate
+        if: steps.baseline.outputs.present == 'true'
+        env:
+          # Scope reason from the previous job, for the log.
+          EVAL_SCOPE_REASON: ${{ needs.eval-scope.outputs.reason }}
+        run: |
+          echo "Gate runs because: $EVAL_SCOPE_REASON"
+          set +e
+          uv run --locked --no-dev python -m evals.run \
+            --repeats 3 --concurrency 3 \
+            --baseline evals/baseline.json \
+            --output-dir eval-results
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            0) ;;
+            2) echo "::error title=Conversation evaluations: infrastructure error::No verdict could be reached (exit 2): a provider/infrastructure error, or evals/baseline.json has no entry for the model/effort under test. This is not a behavioral regression; see the verdict table in the job summary." ;;
+            *) echo "::error title=Conversation evaluations: behavioral regression::At least one scenario regressed relative to evals/baseline.json (exit $code). See the verdict table in the job summary; do not simply rerun." ;;
+          esac
+          exit "$code"
+
+      - name: Upload sanitized evaluation traces and verdict
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: conversation-eval-results
+          path: eval-results/
+          if-no-files-found: warn
+          retention-days: 14
+
+  build:
+    name: Verify Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build image (verify only, no push)
+        run: docker build --provenance=false --sbom=false -t databricks-slack-agent:pr-check .
+
+  terraform:
+    name: Validate Terraform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          # Keep in step with required_version in infrastructure/versions.tf.
+          terraform_version: "1.13.3"
+          terraform_wrapper: false
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive infrastructure
+
+      - name: Initialize without a backend
+        run: terraform -chdir=infrastructure init -backend=false
+
+      - name: Validate configuration
+        run: terraform -chdir=infrastructure validate
