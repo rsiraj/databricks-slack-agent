@@ -2,7 +2,7 @@
 # Digest is for the linux/amd64 image (Lambda functions use architectures = ["x86_64"]).
 # The Python minor is pinned deliberately (pyproject.toml requires-python and uv.lock
 # are resolved for 3.12); .github/dependabot.yml only lets digest updates through.
-FROM public.ecr.aws/lambda/python:3.12@sha256:1eb923b5c41f678871365b8f1bd3a469a4af1608e5d38f778cdd3b264051f096
+FROM public.ecr.aws/lambda/python:3.14@sha256:b81a4aa3bc1d56999090333cefea611e5a84bb4e2638c1ae4107fdc9b8622da3
 
 # Pin pip itself so the resolver/hash-checking behaviour does not drift between builds.
 RUN pip install --no-cache-dir "pip==26.2.1"
